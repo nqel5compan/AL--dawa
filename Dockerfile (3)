@@ -1,0 +1,73 @@
+# ============================================================
+# Dockerfile متعدد المراحل — مستخدم غير root (نسخة محصّنة)
+# Railway: builder=DOCKERFILE — app = CMD ، worker = نفس الـ image (startCommand)
+# ============================================================
+
+# ---------- 1) deps: كل التبعيات (بما فيها dev) من الـ lockfile ----------
+FROM node:22-alpine AS deps
+WORKDIR /app
+# openssl مطلوب لـ Prisma على alpine، libc6-compat لبعض الحزم الأصلية
+RUN apk add --no-cache libc6-compat openssl
+COPY package.json package-lock.json* ./
+COPY prisma ./prisma
+RUN npm ci --no-audit --no-fund
+
+# ---------- 2) builder: فحص الملفات + بناء Next ----------
+FROM node:22-alpine AS builder
+WORKDIR /app
+RUN apk add --no-cache libc6-compat openssl
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# استرجاع تلقائي: لو الرفع ناقص وفيه aldawa-bundle.tar.gz في الريبو، يُفك منه src/scripts/public/prisma
+RUN need=0; for p in package.json prisma/schema.prisma prisma/migrations src/app src/lib src/worker src/components src/hooks src/middleware.ts src/env.ts tsconfig.json; do [ -e "$p" ] || need=1; done; \
+    if [ "$need" = 1 ] && [ -f aldawa-bundle.tar.gz ]; then echo ">>> ملفات ناقصة — استرجاع من aldawa-bundle.tar.gz"; tar xzf aldawa-bundle.tar.gz; fi
+
+# فحص مبكر: لو الرفع ناقص يظهر السبب بوضوح بدل "/src not found"
+RUN for p in package.json prisma/schema.prisma prisma/migrations src/app src/lib src/worker tsconfig.json; do \
+      [ -e "$p" ] || { echo ""; echo "!!! الرفع ناقص — '$p' غير موجود. ارفع المشروع بـ git (push-to-github) وليس من المتصفح."; echo ""; exit 1; }; \
+    done
+
+# حماية: لو public ما وصل لا يفشل البناء
+RUN mkdir -p public scripts
+# لو scripts/migrate.sh ما وصل — يُنشأ هنا تلقائيًا (preDeployCommand يعتمد عليه)
+RUN [ -f scripts/migrate.sh ] || printf '#!/bin/sh\nset -e\ncd "$(dirname "$0")/.."\n./node_modules/.bin/prisma migrate deploy\n' > scripts/migrate.sh
+# حماية من نهايات أسطر ويندوز (CRLF) في سكربتات الـ shell
+RUN sed -i 's/\r$//' scripts/*.sh
+
+# قيم زائفة لوقت البناء فقط (لا تدخل الـ image النهائي) — لتجنب ENV_INVALID أثناء next build
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    DATABASE_URL="postgresql://build:build@localhost:5432/build" \
+    REDIS_URL="redis://localhost:6379" \
+    JWT_SECRET="build-time-placeholder-secret-0123456789abcdef"
+RUN npx prisma generate && npm run build
+
+# ---------- 3) runner ----------
+FROM node:22-alpine AS runner
+WORKDIR /app
+RUN apk add --no-cache poppler-utils openssl libc6-compat \
+    && addgroup -S aldawa && adduser -S aldawa -G aldawa
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0 \
+    NEXT_TELEMETRY_DISABLED=1
+
+# node_modules الكاملة من deps: تضمن وجود prisma CLI بكل تبعياته (للـ migrate)
+# وtsx/esbuild للـ worker — بلا نقص في الشجرة. ثم عميل Prisma المولَّد من builder.
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
+COPY package.json package-lock.json* ./
+
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/scripts ./scripts
+COPY --from=builder /app/tsconfig.json ./
+
+RUN mkdir -p uploads && chown -R aldawa:aldawa /app
+USER aldawa
+EXPOSE 3000
+CMD ["node", "server.js"]

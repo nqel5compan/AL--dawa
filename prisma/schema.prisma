@@ -1,0 +1,777 @@
+// ============================================================
+// Prisma schema — PostgreSQL 16 — Al Dawa v2
+// القواعد الطبية (البروتوكولات/القيم الحرجة/الكتالوج) بيانات لا كود.
+// نسخ التقارير غير قابلة للمسح — كل تصحيح ينشئ إصدارًا جديدًا.
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------- Users & Profiles ----------------
+
+enum Role {
+  PATIENT
+  DOCTOR
+  LAB
+  LAB_SUPERVISOR
+  ADMIN
+  MEDICAL_OFFICER
+}
+
+enum ConsentType {
+  DATA_PROCESSING
+  AI_ANALYSIS
+  DOCTOR_SHARE
+  NOTIFICATIONS
+  RESEARCH
+  LAB_RESULT_SHARING
+}
+
+model ContactMessage {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  subject   String
+  message   String
+  handled   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  phone           String?   @unique
+  passwordHash    String
+  fullName        String
+  role            Role      @default(PATIENT)
+  phoneVerifiedAt DateTime?
+  emailVerifiedAt DateTime?
+  labId           String?
+  lab             Lab?      @relation(fields: [labId], references: [id])
+  locale          String    @default("ar")
+  isActive        Boolean   @default(true)
+  // إبطال فوري لكل الرموز عند الخروج/التعليق/تغيير الدور — أي زيادة تُقطع الجلسات القديمة
+  tokenVersion    Int       @default(0)
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  patientProfile   PatientProfile?
+  doctorProfile    DoctorProfile?
+  consents         Consent[]
+  familyMembers    FamilyMember[]
+  reports          MedicalReport[]   @relation("Owner")
+  assignedReports  MedicalReport[]   @relation("AssignedDoctor")
+  followUpPlans    FollowUpPlan[]    @relation("FollowUpPlans")
+  doctorPlans      FollowUpPlan[]    @relation("DoctorFollowUpPlans")
+  reviews          DoctorReview[]
+  notifications    Notification[]
+  subscriptions    Subscription[]
+  payments         Payment[]
+  chatMessages     ChatMessage[]
+  auditLogs        AuditLog[]
+  aiInteractions   AiInteraction[]
+  screeningRecords ScreeningRecord[]
+  criticalAlerts   CriticalAlert[]
+  labOrders        LabOrder[]        @relation("PatientOrders")
+
+  @@index([labId])
+  @@index([role, isActive])
+}
+
+model PatientProfile {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dateOfBirth           DateTime?
+  gender                String?   // MALE | FEMALE
+  gov                   String?
+  city                  String?
+  emergencyContact      String?
+  heightCm              Float?
+  weightKg              Float?
+  bpSystolic            Int?
+  bpDiastolic           Int?
+  chronicConditions     String    @default("[]")
+  medications           String    @default("[]")
+  allergies             String    @default("[]")
+  surgeries             String    @default("[]")
+  smokingStatus         String?   // NEVER | FORMER | CURRENT
+  quitYearsAgo          Int?
+  activityLevel         String?   // SEDENTARY | LIGHT | MODERATE | ACTIVE
+  familyHistory         String    @default("[]")
+  personalCancerHistory Boolean   @default(false)
+  geneticRiskFactors    String    @default("[]")
+  reproductiveInfo      String    @default("{}")
+  completion            Int       @default(0)
+  updatedAt             DateTime  @updatedAt
+}
+
+model DoctorProfile {
+  id            String  @id @default(cuid())
+  userId        String  @unique
+  user          User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialty     String
+  licenseNumber String
+  bio           String?
+  isVerified    Boolean @default(false)
+  mfaEnabled    Boolean @default(true)
+}
+
+model Consent {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        ConsentType
+  source      String?     // REGISTER | WITHDRAWN | RE_GRANTED
+  granted     Boolean     @default(false)
+  withdrawnAt DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@unique([userId, type])
+}
+
+model FamilyMember {
+  id          String    @id @default(cuid())
+  ownerUserId String
+  owner       User      @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  name        String
+  relation    String    // SPOUSE | SON | DAUGHTER | FATHER | MOTHER | BROTHER | SISTER | OTHER
+  dateOfBirth DateTime?
+  gender      String?
+  heightCm    Float?
+  weightKg    Float?
+  healthData  String    @default("{}")
+  createdAt   DateTime  @default(now())
+
+  reports          MedicalReport[]
+  screeningRecords ScreeningRecord[]
+}
+
+// ---------------- شبكة سوهاج ----------------
+
+model Markaz {
+  id        String   @id @default(cuid())
+  gov       String   @default("سوهاج")
+  name      String
+  nameEn    String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  labs      Lab[]
+}
+
+model Lab {
+  id             String             @id @default(cuid())
+  name           String
+  licenseNumber  String?
+  markazId       String?
+  markaz         Markaz?            @relation(fields: [markazId], references: [id])
+  contactName    String?
+  contactPhone   String?
+  address        String?
+  isVerified     Boolean            @default(false)
+  isActive       Boolean            @default(false)
+  pricingModel   String             @default("NONE") // NONE | PER_RESULT | COMMISSION
+  pricePerResult Float?
+  commissionPct  Float?
+  staff          User[]
+  reports        MedicalReport[]
+  pendingResults PendingLabResult[]
+  corrections    ReportCorrection[]
+  orders         LabOrder[]
+  holds          IdentityHold[]
+  createdAt      DateTime           @default(now())
+}
+
+// ---------------- طلبات الفحص (رقم طلب فريد + QR) ----------------
+
+enum LabOrderStatus {
+  CREATED
+  IN_PROGRESS
+  RESULT_UPLOADED
+  CONFIRMED
+  CANCELLED
+}
+
+model LabOrder {
+  id          String        @id @default(cuid())
+  orderNumber String        @unique
+  qrToken     String        @unique // رمز المسح — جزء من محتوى QR
+  status      LabOrderStatus @default(CREATED)
+  patientId   String
+  patient     User          @relation("PatientOrders", fields: [patientId], references: [id], onDelete: Cascade)
+  labId       String
+  lab         Lab           @relation(fields: [labId], references: [id], onDelete: Cascade)
+  testKeys    String        @default("[]") // JSON مفاتيح TestCatalog
+  note        String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  reports     MedicalReport[]
+
+  @@index([labId, status, createdAt(sort: Desc)])
+  @@index([patientId, createdAt(sort: Desc)])
+}
+
+// إيقاف الإرسال عند اختلاف الاسم — لا يعالجه إلا مشرف المعمل (الإدارة لا ترى بيانات مرضى)
+enum IdentityHoldStatus {
+  OPEN
+  APPROVED
+  REJECTED
+}
+
+model IdentityHold {
+  id           String            @id @default(cuid())
+  labId        String
+  lab          Lab               @relation(fields: [labId], references: [id], onDelete: Cascade)
+  reportId     String? // يُملأ عند إنشاء التقرير الموقوف
+  orderNumber  String?
+  expectedName String // الاسم في الطلب/الحساب
+  providedName String // الاسم في التقرير المرفوع
+  reason       String            @default("NAME_MISMATCH")
+  status       IdentityHoldStatus @default(OPEN)
+  reviewedById String?
+  reviewedAt   DateTime?
+  note         String?
+  createdAt    DateTime          @default(now())
+
+  @@index([labId, status, createdAt(sort: Desc)])
+}
+
+// نتيجة لمريض غير مسجل — مشفّرة AES-256-GCM + انتهاء صلاحية
+model PendingLabResult {
+  id              String    @id @default(cuid())
+  labId           String
+  lab             Lab       @relation(fields: [labId], references: [id], onDelete: Cascade)
+  patientPhone    String // مشفر AES-256-GCM
+  phoneHash       String? // HMAC-SHA256 للرقم المطبّع — للمطابقة عند الاستلام
+  patientName     String
+  fileName        String
+  filePath        String
+  mimeType        String
+  fileSize        Int
+  reportType      String    @default("LAB")
+  labReportNo     String?
+  testDate        DateTime?
+  notes           String?
+  status          String    @default("PENDING") // PENDING | CLAIMED | EXPIRED | CANCELLED
+  claimToken      String    @unique
+  expiresAt       DateTime
+  claimedUserId   String?
+  claimedReportId String?
+  claimedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([labId, status, createdAt(sort: Desc)])
+  @@index([phoneHash, status])
+  @@index([status, expiresAt])
+}
+
+// ---------------- إعدادات النظام ----------------
+
+model SystemSetting {
+  key       String   @id
+  value     String
+  noteAr    String?
+  noteEn    String?
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------- خطط المتابعة والتصحيحات ----------------
+
+model FollowUpPlan {
+  id        String    @id @default(cuid())
+  patientId String
+  patient   User      @relation("FollowUpPlans", fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId  String
+  doctor    User      @relation("DoctorFollowUpPlans", fields: [doctorId], references: [id], onDelete: Cascade)
+  reportId  String?
+  testKey   String?
+  titleAr   String
+  titleEn   String?
+  dueDate   DateTime?
+  note      String?
+  status    String    @default("ACTIVE") // ACTIVE | DONE | CANCELLED
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@index([patientId, status])
+}
+
+model ReportCorrection {
+  id          String        @id @default(cuid())
+  reportId    String
+  report      MedicalReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  labId       String
+  lab         Lab           @relation(fields: [labId], references: [id], onDelete: Cascade)
+  requestedBy String
+  valueId     String?
+  field       String        // VALUE | REFERENCE | DATE | OTHER
+  details     String
+  status      String        @default("OPEN") // OPEN | RESOLVED | REJECTED
+  resolution  String?
+  oldValue    String?
+  newValue    String?
+  resolvedAt  DateTime?
+  resolvedBy  String?
+  createdAt   DateTime      @default(now())
+
+  @@index([labId, status, createdAt(sort: Desc)])
+  @@index([reportId])
+}
+
+// ---------------- التقارير — إصدارات غير قابلة للمسح ----------------
+
+enum ReportSource {
+  PATIENT_UPLOAD
+  LAB_DIRECT
+}
+
+model MedicalReport {
+  id               String             @id @default(cuid())
+  ownerUserId      String
+  owner            User               @relation("Owner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  familyMemberId   String?
+  familyMember     FamilyMember?      @relation(fields: [familyMemberId], references: [id], onDelete: SetNull)
+  fileName         String
+  filePath         String
+  fileType         String
+  mimeType         String
+  fileSize         Int
+  reportType       String             @default("LAB") // LAB | RADIOLOGY | OTHER
+  labName          String?
+  testDate         DateTime?
+  notes            String?
+  status           String             @default("UPLOADED") // UPLOADED|PROCESSING|EXTRACTED|CONFIRMED|CONFIRMED_LAB|UNDER_REVIEW|REVIEWED|NEEDS_INFO|FAILED
+  source           ReportSource       @default(PATIENT_UPLOAD)
+  labId            String?
+  lab              Lab?               @relation(fields: [labId], references: [id])
+  labOrderId       String? // الطلب المربوط إن وجد
+  labOrder         LabOrder?          @relation(fields: [labOrderId], references: [id])
+  labReportNo      String?
+  issuedAt         DateTime?
+  labVerifiedById  String?
+  labVerifiedAt    DateTime?
+  deliveredAt      DateTime?
+  patientOpenedAt  DateTime?
+  corrections      ReportCorrection[]
+  demo             Boolean            @default(false)
+  processingStep   String?
+  extractionMeta   String             @default("{}")
+  assignedDoctorId String?
+  assignedDoctor   User?              @relation("AssignedDoctor", fields: [assignedDoctorId], references: [id])
+  uploadedAt       DateTime           @default(now())
+  processedAt      DateTime?
+  currentVersion   Int                @default(1) // الإصدار الحالي — سلسلة ReportVersion محفوظة كاملة
+  version          Int                @default(1) // يزداد مع كل تغيير حالة — لترتيب الأحداث
+  updatedAt        DateTime           @updatedAt
+
+  values    ExtractedValue[]
+  reviews   DoctorReview[]
+  alerts    CriticalAlert[]
+  versions  ReportVersion[]
+
+  @@index([ownerUserId, uploadedAt(sort: Desc)])
+  @@index([labId, source, uploadedAt(sort: Desc)])
+  @@index([assignedDoctorId, status, uploadedAt(sort: Desc)])
+  @@index([status, uploadedAt(sort: Desc)])
+}
+
+// سلسلة إصدارات غير قابلة للمسح — الأصل محفوظ أبدًا، الجديد يحل محله بسلسلة
+model ReportVersion {
+  id           String        @id @default(cuid())
+  reportId     String
+  report       MedicalReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  version      Int
+  fileName     String
+  filePath     String
+  fileType     String
+  mimeType     String
+  fileSize     Int
+  valuesJson   String        @default("[]") // لقطة القيم وقت الإصدار
+  changeNote   String? // سبب الإصدار (تصحيح معمل...)
+  createdById  String?
+  createdAt    DateTime      @default(now())
+
+  @@unique([reportId, version])
+  @@index([reportId, version(sort: Desc)])
+}
+
+model ExtractedValue {
+  id           String        @id @default(cuid())
+  reportId     String
+  report       MedicalReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  canonicalKey String?
+  rawName      String
+  value        Float?
+  valueText    String?
+  unit         String?
+  refLow       Float?
+  refHigh      Float?
+  refText      String?
+  flag         String        @default("UNKNOWN") // NORMAL|LOW|HIGH|CRITICAL_LOW|CRITICAL_HIGH|UNKNOWN
+  confidence   Float         @default(0)
+  verification String        @default("PENDING") // PENDING|CONFIRMED_USER|CORRECTED_USER|VERIFIED_LAB|CORRECTED_LAB|VERIFIED_DOCTOR|CORRECTED_DOCTOR
+  demo         Boolean       @default(false)
+  section      String?
+  notes        String?
+  testDate     DateTime?
+  confirmedAt  DateTime?
+  createdAt    DateTime      @default(now())
+
+  @@index([reportId])
+  @@index([canonicalKey, testDate(sort: Desc)])
+}
+
+model TestCatalog {
+  id             String  @id @default(cuid())
+  key            String  @unique
+  nameAr         String
+  nameEn         String
+  unit           String
+  refLow         Float?
+  refHigh        Float?
+  refNoteAr      String?
+  refNoteEn      String?
+  category       String
+  genderSpecific String?
+  descriptionAr  String?
+  descriptionEn  String?
+  isActive       Boolean @default(true)
+}
+
+// ---------------- قواعد القيم الحرجة — بيانات معتمدة من المسؤول الطبي ----------------
+
+enum ReviewStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  RETIRED
+}
+
+model CriticalRule {
+  id          String       @id @default(cuid())
+  key         String       @unique
+  testKey     String // canonicalKey في TestCatalog
+  op          String       // < | >
+  threshold   Float
+  severity    String       // HIGH | URGENT
+  unit        String
+  messageAr   String
+  messageEn   String
+  status      ReviewStatus @default(DRAFT)
+  approvedById String?
+  approvedAt  DateTime?
+  version     Int          @default(1)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+// ---------------- محرك الفحوصات الوقائية ----------------
+
+model ScreeningProtocol {
+  id               String            @id @default(cuid())
+  key              String            @unique
+  titleAr          String
+  titleEn          String
+  summaryAr        String
+  summaryEn        String
+  category         String
+  gender           String?
+  minAge           Int               @default(18)
+  maxAge           Int?
+  intervalMonths   Int?
+  riskFactors      String            @default("[]")
+  requiresRisk     Boolean           @default(false)
+  testKeys         String            @default("[]")
+  protocolType     String            @default("SCREENING") // SCREENING|DIAGNOSTIC|ROUTINE_MONITORING|FOLLOW_UP
+  exclusionsAr     String?
+  exclusionsEn     String?
+  seeDoctorAr      String?
+  seeDoctorEn      String?
+  sourceOrg        String // MOH_EG | WHO | USPSTF | IARC | ACS | NICE
+  guidelineVersion String
+  guidelineDate    String
+  doctorDiscussion Boolean           @default(false)
+  active           Boolean           @default(true)
+  status           ReviewStatus      @default(DRAFT)
+  approvedById     String?
+  approvedAt       DateTime?
+  version          Int               @default(1)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  records          ScreeningRecord[]
+  reviews          ProtocolReview[]
+  versions         ProtocolVersion[]
+}
+
+model ScreeningRecord {
+  id             String            @id @default(cuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  familyMemberId String?
+  familyMember   FamilyMember?     @relation(fields: [familyMemberId], references: [id], onDelete: Cascade)
+  protocolId     String
+  protocol       ScreeningProtocol @relation(fields: [protocolId], references: [id], onDelete: Cascade)
+  status         String            // DUE|OVERDUE|UPCOMING|COMPLETED|NOT_ELIGIBLE
+  eligible       Boolean           @default(true)
+  demo           Boolean           @default(false)
+  lastDoneAt     DateTime?
+  nextDueAt      DateTime?
+  reasonAr       String?
+  reasonEn       String?
+  updatedAt      DateTime          @updatedAt
+  slotKey        String            @default("main")
+
+  @@unique([userId, protocolId, slotKey])
+}
+
+model ProtocolReview {
+  id          String            @id @default(cuid())
+  protocolId  String
+  protocol    ScreeningProtocol @relation(fields: [protocolId], references: [id], onDelete: Cascade)
+  officerId   String
+  officerName String
+  action      String            // SUBMIT_REVIEW | APPROVE | RETURN | RETIRE
+  fromStatus  String
+  toStatus    String
+  note        String?
+  snapshot    String            @default("{}")
+  createdAt   DateTime          @default(now())
+
+  @@index([protocolId, createdAt(sort: Desc)])
+}
+
+model ProtocolVersion {
+  id            String            @id @default(cuid())
+  protocolId    String
+  protocol      ScreeningProtocol @relation(fields: [protocolId], references: [id], onDelete: Cascade)
+  version       Int
+  snapshot      String
+  publishedById String
+  publishedAt   DateTime          @default(now())
+  note          String?
+
+  @@unique([protocolId, version])
+  @@index([protocolId, version(sort: Desc)])
+}
+
+// عوامل الخطورة — عوامل فقط بلا درجات ولا نسب
+model RiskFactorAssessment {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  factors       String   @default("[]")
+  factorsCount  Int      @default(0)
+  engineVersion String   @default("2")
+  computedAt    DateTime @default(now())
+}
+
+model KnowledgeSource {
+  id          String   @id @default(cuid())
+  org         String
+  titleAr     String
+  titleEn     String?
+  url         String?
+  version     String?
+  publishedAt String?
+  notesAr     String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// ---------------- المراجعة الطبية ----------------
+
+model DoctorReview {
+  id             String        @id @default(cuid())
+  reportId       String
+  report         MedicalReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         User          @relation(fields: [doctorId], references: [id])
+  status         String        @default("PENDING") // PENDING|IN_REVIEW|COMPLETED|NEEDS_INFO|ESCALATED
+  urgency        String        @default("ROUTINE")
+  notes          String?
+  recommendation String?
+  requestedInfo  String?
+  corrections    String        @default("[]")
+  log            String        @default("[]")
+  needsReview    Boolean       @default(false) // تُعلَّم عند تصحيح نتيجة المعمل — الرأي القديم يحتاج مراجعة
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  completedAt    DateTime?
+
+  @@index([doctorId, status, createdAt(sort: Desc)])
+  @@index([status, urgency, createdAt(sort: Desc)])
+}
+
+model CriticalAlert {
+  id               String         @id @default(cuid())
+  userId           String
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reportId         String?
+  report           MedicalReport? @relation(fields: [reportId], references: [id])
+  extractedValueId String?
+  ruleKey          String
+  severity         String
+  messageAr        String
+  messageEn        String
+  status           String         @default("OPEN") // OPEN|ACK|RESOLVED
+  createdAt        DateTime       @default(now())
+  resolvedAt       DateTime?
+
+  @@index([userId, status, createdAt(sort: Desc)])
+}
+
+// ---------------- التفاعل والاشتراكات ----------------
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  titleAr   String
+  titleEn   String
+  bodyAr    String
+  bodyEn    String
+  severity  String   @default("INFO")
+  channel   String   @default("IN_APP")
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead, createdAt(sort: Desc)])
+  @@index([userId, type, createdAt(sort: Desc)])
+}
+
+model Subscription {
+  id          String    @id @default(cuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planKey     String    @default("FREE")
+  status      String    @default("ACTIVE")
+  startedAt   DateTime  @default(now())
+  expiresAt   DateTime?
+  reportsUsed Int       @default(0)
+
+  @@index([userId, status])
+  @@index([planKey, status])
+}
+
+model Plan {
+  key            String  @id // FREE | PLUS | FAMILY
+  nameAr         String
+  nameEn         String
+  priceEgp       Float   @default(0)
+  reportsLimit   Int     @default(3) // -1 = غير محدود
+  featuresAr     String  @default("[]")
+  featuresEn     String  @default("[]")
+  includesReview Boolean @default(false)
+  isActive       Boolean @default(true)
+  sortOrder      Int     @default(0)
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount    Float
+  planKey   String?
+  method    String   @default("MANUAL")
+  status    String   @default("PAID")
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+}
+
+// ---------------- الذكاء الاصطناعي ----------------
+
+model AiInteraction {
+  id            String   @id @default(cuid())
+  userId        String?
+  user          User?    @relation(fields: [userId], references: [id])
+  agentKey      String
+  status        String   @default("SUCCESS") // SUCCESS|FAILED|FALLBACK
+  provider      String   @default("builtin")
+  inputSummary  String?
+  outputSummary String?
+  tokens        Int?
+  durationMs    Int?
+  meta          String   @default("{}")
+  createdAt     DateTime @default(now())
+}
+
+model ChatMessage {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String // USER | ASSISTANT
+  content   String
+  meta      String   @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+}
+
+// ---------------- التدقيق والأحداث ----------------
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  actorRole   String?
+  action      String
+  entityType  String?
+  entityId    String?
+  meta        String   @default("{}")
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+}
+
+// Outbox — يُكتب في نفس الـ transaction، بلا أي بيانات طبية
+model DomainEvent {
+  seq         Int       @id @default(autoincrement())
+  id          String    @unique @default(cuid())
+  type        String
+  reportId    String?
+  patientId   String?
+  labId       String?
+  doctorId    String?
+  orderId     String?
+  version     Int       @default(1)
+  payload     String    @default("{}")
+  occurredAt  DateTime  @default(now())
+  publishedAt DateTime?
+
+  @@index([publishedAt, occurredAt(sort: Desc)])
+  @@index([reportId, occurredAt(sort: Desc)])
+}
+
+// جداول تجميع — داشبورد الإدارة أرقام مجمعة فقط
+model DashboardStat {
+  id          String   @id @default(cuid())
+  scope       String   // LAB | DOCTOR
+  scopeId     String
+  day         String   // YYYY-MM-DD بتوقيت القاهرة
+  uploads     Int      @default(0)
+  delivered   Int      @default(0)
+  opened      Int      @default(0)
+  corrections Int      @default(0)
+  critical    Int      @default(0)
+  reviews     Int      @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([scope, scopeId, day])
+}

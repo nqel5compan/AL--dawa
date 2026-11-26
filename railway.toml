@@ -1,0 +1,13 @@
+# ============================================================
+# إعدادات Railway — خدمة app (الويب) — بناء من الـ Dockerfile
+# worker = Service منفصل بنفس الـ image — Config as Code path =
+#   railway.worker.toml  (startCommand بدل CMD — بلا healthcheck/preDeploy)
+# ============================================================
+
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+healthcheckPath = "/api/ready"
+healthcheckTimeout = 120
+preDeployCommand = "sh scripts/migrate.sh"

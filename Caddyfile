@@ -1,0 +1,29 @@
+# Caddy — HTTPS تلقائي (Let's Encrypt) + وكيل عكسي للتطبيق
+# DOMAIN يُضبط في .env
+# ملاحظة: هذا الملف للنشر على VPS فقط — على Railway لا يُستخدم
+# (البروكسي وشهادات TLS يديرها Railway مباشرة)
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# SSE: بلا تخزين مؤقت ولا timeout قصير
+	reverse_proxy app:3000 {
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# الملفات المرفوعة: بلا تخزين مؤقت إطلاقًا
+	@api path /api/reports/*/file
+	header @api Cache-Control "no-store, private"
+}

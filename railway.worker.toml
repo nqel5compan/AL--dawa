@@ -1,0 +1,11 @@
+# ============================================================
+# إعدادات Railway — خدمة worker (نفس الـ image، Start Command فقط)
+# في لوحة Railway: Settings → Config as Code path = railway.worker.toml
+# (بدون healthcheck HTTP وبدون preDeployCommand)
+# ============================================================
+
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+startCommand = "node node_modules/.bin/tsx src/worker/index.ts"

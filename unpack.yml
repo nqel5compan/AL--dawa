@@ -1,0 +1,39 @@
+name: Unpack project
+
+# يفك aldawa-project.zip داخل الريبو ويرفع الملفات كاملة (src و public وغيرها)
+# يعمل تلقائيًا عند رفع aldawa-project.zip، أو يدويًا من تبويب Actions ← Run workflow
+on:
+  push:
+    paths:
+      - "aldawa-project.zip"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack zip
+        run: |
+          set -e
+          test -f aldawa-project.zip || { echo "aldawa-project.zip غير موجود في الجذر"; exit 1; }
+          rm -rf _tmp && mkdir _tmp
+          unzip -q aldawa-project.zip -d _tmp
+          cp -a _tmp/Al-dawa/. .
+          rm -rf _tmp aldawa-project.zip
+          N=$(find src -type f | wc -l)
+          echo "عدد ملفات src: $N"
+          test "$N" -ge 100 || { echo "ملفات src ناقصة"; exit 1; }
+          test -f Dockerfile && test -f package.json && test -f public/robots.txt
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Unpack full project (src, public, config)"
+          git push

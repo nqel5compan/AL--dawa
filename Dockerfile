@@ -18,6 +18,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # حماية: لو لم يصل مجلد public للريبو (رفع ناقص) لا يفشل البناء
 RUN mkdir -p public
+# فحص مبكر: لو الرفع ناقص يظهر سبب واضح بدل "/src not found"
+RUN for p in src/app src/lib src/worker scripts prisma/migrations package.json; do \
+      [ -e "$p" ] || { echo ""; echo "!!! ERROR: '$p' غير موجود في الريبو — الرفع ناقص. ارفع بـ git/GitHub Desktop (انظر push-to-github.sh)"; echo ""; exit 1; }; \
+    done
 # env زائفة للبناء — فحص env وقت التشغيل فقط
 ENV NODE_ENV=production
 RUN npx prisma generate && npm run build
@@ -44,9 +48,9 @@ COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/prisma/migrations ./prisma/migrations
 # tsconfig للـ worker — tsx يقرأ paths "@/..." منه
-COPY tsconfig.json ./
-COPY src ./src
-COPY scripts ./scripts
+COPY --from=builder /app/tsconfig.json ./
+COPY --from=builder /app/src ./src
+COPY --from=builder /app/scripts ./scripts
 RUN mkdir -p uploads && chown -R aldawa:aldawa /app
 USER aldawa
 EXPOSE 3000

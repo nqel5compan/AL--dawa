@@ -6,6 +6,7 @@
 
 [build]
 builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.final"
 
 [deploy]
 startCommand = "node node_modules/.bin/tsx src/worker/index.ts"
